@@ -2,6 +2,8 @@
 
 Serve Aleph Alpha's [Kolibri-1](https://huggingface.co/Aleph-Alpha/Kolibri-1) on one NVIDIA DGX Spark with vLLM, using the official FP8 checkpoint as published. One command builds the image, downloads the weights and starts an OpenAI-compatible API.
 
+> **Experimental, work in progress.** Kolibri-1 came out on 3 October 2026 and this repository follows it closely. The default stack is vLLM 0.31.0, which is newer than the 0.29.x that Aleph Alpha's plugin officially supports. It passes `tools/check.py` and benchmarks the same as 0.29, but it is an untested combination as far as Aleph Alpha is concerned. Set `VLLM_VERSION=0.29.0` for the supported setup. Expect defaults and numbers to change.
+
 Kolibri-1 is a 78B mixture-of-experts model (3.5B active per token) focused on German and English, with a reasoning mode and tool calling. The model card lists 2x H100 as the minimum. On a Spark it fits in one box: the FP8 weights take 73.4 GiB of the 128 GB unified memory, and the KV cache stays small because only 10 of the 50 layers attend over the full context (the other 40 use a 513-token sliding window). A 262k-token sequence needs about 2.6 GiB of fp8 KV.
 
 **Hardware:** DGX Spark (GB10, sm_121, aarch64), driver 580, CUDA 13, Docker with the NVIDIA Container Toolkit and Compose v2. About 85 GB free disk.
@@ -31,7 +33,7 @@ Thinking is on by default at effort `high`. Per request, set `chat_template_kwar
 
 ## How it is put together
 
-- **`Dockerfile`**: `vllm/vllm-openai:v0.29.0` plus Aleph Alpha's vLLM plugin [`aleph-alpha-inference`](https://github.com/Aleph-Alpha/aleph-alpha-inference) 1.0.0, which registers the `Kolibri1ForCausalLM` architecture and the `kolibri1` reasoning and tool parsers. Aleph Alpha publishes an image of their own, but only for amd64; this is the same recipe on the arm64 vLLM image. The build fails if the architecture does not register.
+- **`Dockerfile`**: `vllm/vllm-openai:v0.31.0` plus Aleph Alpha's vLLM plugin [`aleph-alpha-inference`](https://github.com/Aleph-Alpha/aleph-alpha-inference) 1.0.0, which registers the `Kolibri1ForCausalLM` architecture and the `kolibri1` reasoning and tool parsers. Aleph Alpha publishes an image of their own, but only for amd64; this is the same recipe on the arm64 vLLM image. The plugin is installed with `--no-deps`, because its pin would otherwise pull vLLM back to 0.29. The build fails if the architecture does not register.
 - **`compose.yaml`**: a one-shot `download` service fetches the pinned checkpoint revision into your normal Hugging Face cache (resumable, and a no-op once complete). The `kolibri` service starts after it, serves offline from that cache, keeps torch.compile and Triton caches in `~/.cache/kolibri-1-dgx-spark` so restarts skip compilation, and has a healthcheck on `/health`.
 - Nothing is installed on the host.
 
@@ -48,23 +50,35 @@ Copy `.env.example` to `.env` and uncomment what you want to change, then `docke
 | `KV_DTYPE` | fp8 | What Aleph Alpha evaluated with |
 | `REASONING_EFFORT` | (template default: high) | Server-wide default. Once set, clients override it with `reasoning_effort`; `enable_thinking: false` alone no longer does. |
 | `PORT`, `HOST`, `SERVED_NAME` | 8888, 0.0.0.0, Kolibri-1 | |
+| `VLLM_VERSION` | 0.31.0 (experimental) | `0.29.0` is what the plugin officially supports. Rebuilds the image under a new tag. |
 
 For any other vLLM flag, add it to the `command:` list in `compose.yaml`.
 
 ## Numbers
 
-One DGX Spark, vLLM 0.29.0, FP8 weights, fp8 KV, CUDA graphs on.
+One DGX Spark, vLLM 0.31.0, FP8 weights, fp8 KV, CUDA graphs on, measured 5 October 2026.
 
 | `tools/bench.sh` (`vllm bench serve`, random prompts) | Throughput | Median TTFT | Median time per token |
 |---|---|---|---|
-| Decode, 1 stream, 512 in / 512 out | **47 tok/s** | 0.24 s | 20.9 ms (48 tok/s) |
-| Decode, 4 streams | 121 tok/s total | 0.55 s | 32 ms (31 tok/s per stream) |
-| Decode, 8 streams | 160 tok/s total | 0.78 s | 49 ms (20 tok/s per stream) |
-| Prefill, 8k tokens | ~6,300 tok/s | 1.3 s | |
-| Prefill, 32k tokens | ~5,100 tok/s | 6.5 s | |
-| Prefill, 128k tokens | ~2,800 tok/s | 46.6 s | |
+| Decode, 1 stream, 512 in / 512 out | **47 tok/s** | 0.27 s | 20.9 ms (48 tok/s) |
+| Decode, 4 streams | 121 tok/s total | 0.56 s | 32 ms (31 tok/s per stream) |
+| Decode, 8 streams | 161 tok/s total | 0.80 s | 48 ms (21 tok/s per stream) |
+| Prefill, 8k tokens | ~6,200 tok/s | 1.3 s | |
+| Prefill, 32k tokens | ~5,000 tok/s | 6.5 s | |
+| Prefill, 128k tokens | ~2,800 tok/s | 47.0 s | |
 
-Cold start (`up --wait` with the weights already downloaded): about 10 minutes, almost all of it weight loading. The KV pool at default settings holds 1.39M tokens.
+Cold start (`up --wait` with the weights already downloaded): about 10 minutes, almost all of it weight loading. The KV pool at default settings holds 1.29M tokens.
+
+The vLLM versions compared on the same box:
+
+| | 0.29.0 (supported) | 0.30.0 | 0.31.0 (default) |
+|---|---|---|---|
+| Decode, 1 / 4 / 8 streams (tok/s) | 46.9 / 121 / 160 | 46.8 / 121 / 161 | 46.9 / 121 / 161 |
+| TTFT at 8k / 32k / 128k (s) | 1.30 / 6.46 / 46.6 | 1.32 / 6.47 / 46.5 | 1.32 / 6.50 / 47.0 |
+| Weight loading (s) | 562 | 598 | 537 |
+| KV pool (tokens) | 1.39M | 1.37M | 1.29M |
+
+Speed is the same across all three. 0.31 loads a little faster and sizes the KV pool slightly more conservatively, because it now counts MoE memory when profiling.
 
 Long context: `tools/check.py --needle` hides a key in synthetic logs and asks for it back. It found the key at 167k tokens on the default 262k setup (68 s), and at about 350k tokens with `CONTEXT=1048576` (248 s), past the native window.
 
@@ -74,7 +88,7 @@ Benchmark it yourself with `tools/bench.sh`, which runs vLLM's own `vllm bench s
 
 ## Notes
 
-- **Keep `GPU_UTIL` at 0.75.** At 0.80 the server leaves about 15 GiB for everything else, and a second GPU job pushed the box into swap. 0.75 still gives a 1.39M-token KV pool, five full 262k contexts.
+- **Keep `GPU_UTIL` at 0.75.** At 0.80 the server leaves about 15 GiB for everything else, and a second GPU job pushed the box into swap. 0.75 still gives a 1.29M-token KV pool, almost five full 262k contexts.
 - **Loading is CPU-bound.** The NVMe reads 5.3 GB/s, but 115,200 of the checkpoint's 116,303 tensors are per-expert weights and scales, and vLLM's loader processes each one in Python. Repacking the experts would fix it, at the cost of no longer serving the official files. `--safetensors-load-strategy prefetch` cut loading from 568 to 501 s but triggers a RAM warning from vLLM, so it is not enabled.
 - **Things that did not make it faster.** vLLM ships no GB10 fused-MoE config for Kolibri's expert shape (E=384, N=512, FP8 128x128 blocks) and logs "Using default MoE config", but benchmarking the kernel showed it already bandwidth-bound at decode batch sizes. `--linear-backend b12x` (native SM12x FP8 kernels) measured 48.1 tok/s against 47.9 for the default CUTLASS path.
 - **A harmless tokenizer warning.** The log says the tokenizer has "an incorrect regex pattern" and suggests `fix_mistral_regex=True`. Transformers 5 prints this for any local tokenizer whose `config.json` lacks a `transformers_version` field, which Kolibri's does. It only warns.

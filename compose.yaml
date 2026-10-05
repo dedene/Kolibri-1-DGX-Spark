@@ -6,7 +6,7 @@ services:
   # One-shot: fetch the checkpoint (78.8 GB) into the host's Hugging Face cache. Resumable, and a quick no-op once
   # the files are there. Uses the stock vLLM image, which ships the `hf` CLI.
   download:
-    image: vllm/vllm-openai:v${VLLM_VERSION:-0.29.0}
+    image: vllm/vllm-openai:v${VLLM_VERSION:-0.31.0}
     entrypoint: ["hf", "download"]
     command: ["${MODEL_ID:-Aleph-Alpha/Kolibri-1}", "--revision", "${MODEL_REVISION:-e52eb4627d11516b0c01de49210ab5a4e4061444}"]
     environment:
@@ -18,9 +18,9 @@ services:
     build:
       context: .
       args:
-        VLLM_VERSION: ${VLLM_VERSION:-0.29.0}
+        VLLM_VERSION: ${VLLM_VERSION:-0.31.0}
         AA_INFERENCE_VERSION: ${AA_INFERENCE_VERSION:-1.0.0}
-    image: kolibri-1-dgx-spark:vllm${VLLM_VERSION:-0.29.0}-aa${AA_INFERENCE_VERSION:-1.0.0}
+    image: kolibri-1-dgx-spark:vllm${VLLM_VERSION:-0.31.0}-aa${AA_INFERENCE_VERSION:-1.0.0}
     container_name: kolibri-1
     depends_on:
       download:

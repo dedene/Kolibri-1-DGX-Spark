@@ -26,7 +26,9 @@ Serve Aleph Alpha's Kolibri-1 (FP8, 78B MoE / 3.5B active) on one DGX Spark with
 - "incorrect regex pattern / fix_mistral_regex" warning is a false positive (no `transformers_version` in config).
 
 ## Constraints
-- aleph-alpha-inference supports exactly one vLLM minor (1.x -> 0.29). Bump both together.
+- aleph-alpha-inference 1.0.0 officially supports vLLM 0.29.x only. The repo defaults to 0.31.0 (experimental,
+  `--no-deps` install); 0.30.0 and 0.31.0 pass `tools/check.py` at equal speed. Re-run check + bench on every bump,
+  and watch Aleph-Alpha/aleph-alpha-inference#7 for official support.
 - Aleph Alpha's GHCR image is amd64-only; that is why we build our own.
 - DeepGEMM is disabled by the plugin (fp32 block scales); do not enable `VLLM_USE_DEEP_GEMM_E8M0`.
 - Credits: write our own code. Other Spark recipes (MiaAI-Lab, sudoingX) get inspiration credit; never copy their
