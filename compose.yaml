@@ -1,0 +1,66 @@
+# Kolibri-1 on one DGX Spark: `docker compose up -d --wait` builds the image, downloads the pinned checkpoint and
+# returns once the OpenAI-compatible API on :8888 answers. Settings: see .env.example.
+name: kolibri-1
+
+services:
+  # One-shot: fetch the checkpoint (78.8 GB) into the host's Hugging Face cache. Resumable, and a quick no-op once
+  # the files are there. Uses the stock vLLM image, which ships the `hf` CLI.
+  download:
+    image: vllm/vllm-openai:v${VLLM_VERSION:-0.29.0}
+    entrypoint: ["hf", "download"]
+    command: ["${MODEL_ID:-Aleph-Alpha/Kolibri-1}", "--revision", "${MODEL_REVISION:-e52eb4627d11516b0c01de49210ab5a4e4061444}"]
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+
+  kolibri:
+    build:
+      context: .
+      args:
+        VLLM_VERSION: ${VLLM_VERSION:-0.29.0}
+        AA_INFERENCE_VERSION: ${AA_INFERENCE_VERSION:-1.0.0}
+    image: kolibri-1-dgx-spark:vllm${VLLM_VERSION:-0.29.0}-aa${AA_INFERENCE_VERSION:-1.0.0}
+    container_name: kolibri-1
+    depends_on:
+      download:
+        condition: service_completed_successfully
+    gpus: all
+    network_mode: host
+    ipc: host
+    shm_size: 16gb
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      HF_HUB_OFFLINE: "1"
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      TRITON_CACHE_DIR: /root/.cache/triton
+    volumes:
+      # torch.compile / Triton / FlashInfer caches, so only the first start compiles
+      - ${KERNEL_CACHE:-~/.cache/kolibri-1-dgx-spark}:/root/.cache
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+    command:
+      - ${MODEL_ID:-Aleph-Alpha/Kolibri-1}
+      - --revision=${MODEL_REVISION:-e52eb4627d11516b0c01de49210ab5a4e4061444}
+      - --served-model-name=${SERVED_NAME:-Kolibri-1}
+      - --host=${HOST:-0.0.0.0}
+      - --port=${PORT:-8888}
+      - --max-model-len=${CONTEXT:-262144}
+      # RoPE tables are sized from max_position_embeddings; tying it to CONTEXT makes 1M contexts a one-knob change.
+      - '--hf-overrides={"max_position_embeddings": ${CONTEXT:-262144}}'
+      - --max-num-seqs=${MAX_SEQS:-8}
+      - --max-num-batched-tokens=${BATCHED_TOKENS:-8192}
+      - --gpu-memory-utilization=${GPU_UTIL:-0.75}
+      - --kv-cache-dtype=${KV_DTYPE:-fp8}
+      - --reasoning-parser=kolibri1
+      - --tool-call-parser=kolibri1
+      - --enable-auto-tool-choice
+      - '--default-chat-template-kwargs={${REASONING_EFFORT:+"reasoning_effort": "${REASONING_EFFORT}"}}'
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:${PORT:-8888}/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30m      # cold start is ~10 min of weight loading
+      start_interval: 10s
