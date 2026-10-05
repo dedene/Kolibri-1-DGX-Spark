@@ -21,6 +21,8 @@ Serve Aleph Alpha's Kolibri-1 (FP8, 78B MoE / 3.5B active) on one DGX Spark with
 - Cold start ~10 min, CPU-bound weight loading (115,200 per-expert tensors); NVMe does 5.3 GB/s.
 - Decode 48 tok/s, ~68% of the ~71 tok/s roofline. No gain from a GB10 fused-MoE config (kernel already
   bandwidth-bound) or `--linear-backend b12x` (needs `pip install b12x==1.2.6`; 48.1 vs 47.9 tok/s).
+- `--attention-backend B12X` on 0.31 (needs `pip install --no-deps b12x==1.3.0` and `--block-size 128`): correct,
+  but equal to FlashInfer (decode 46.9 tok/s, 128k TTFT 47.9 vs 47.0 s). Not worth the extra dependency.
 - `GPU_UTIL=0.80` + any other GPU job -> swap. Keep 0.75.
 - Setting a server-wide `reasoning_effort` default makes the template ignore a request's `enable_thinking: false`.
 - "incorrect regex pattern / fix_mistral_regex" warning is a false positive (no `transformers_version` in config).
